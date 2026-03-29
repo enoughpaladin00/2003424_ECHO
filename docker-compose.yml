@@ -1,0 +1,139 @@
+services:
+  # ==========================================
+  # 1. API Gateway (Jacopo Rossi - DevOps/Infrastructure)
+  # ==========================================
+  api-gateway:
+    image: nginx:alpine
+    container_name: echo-api-gateway
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend-api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    networks:
+      - echo-network
+    restart: always
+
+  # ==========================================
+  # 2. Message Broker (Fabrizio Pietrobono - Ingestion & Brokerage)
+  # ==========================================
+  message-broker:
+    image: rabbitmq:3-management-alpine
+    container_name: echo-message-broker
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: securebrokerpass
+    ports:
+      - "5672:5672"   # AMQP protocol port
+      - "15672:15672" # Management UI
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # 3. Processing Engine (Emanuele Smisi - Signal Processing)
+  # ==========================================
+  processing-replica:
+    build: 
+      context: ./source/processing-engine
+      dockerfile: Dockerfile
+    deploy:
+      replicas: 3 # Start with 3 dynamically scaling replicas
+    depends_on:
+      message-broker:
+        condition: service_healthy
+      database:
+        condition: service_healthy
+    networks:
+      - echo-network
+    restart: on-failure
+
+  # ==========================================
+  # 4. Persistence Layer (Luca Buonomini - Backend & Database)
+  # ==========================================
+  database:
+    image: postgres:15-alpine
+    container_name: echo-database
+    environment:
+      POSTGRES_USER: echo_admin
+      POSTGRES_PASSWORD: echodbpassword
+      POSTGRES_DB: echo_classified_events
+    ports:
+      - "5432:5432"
+    volumes:
+      - echo-db-data:/var/lib/postgresql/data
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echo_admin -d echo_classified_events"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend-api:
+    build: 
+      context: ./source/backend
+      dockerfile: Dockerfile
+    container_name: echo-backend-api
+    environment:
+      - DB_HOST=database
+      - DB_USER=echo_admin
+      - DB_PASS=echodbpassword
+      - DB_NAME=echo_classified_events
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ==========================================
+  # 5. Command Dashboard (Fabiano Cacioli - Frontend)
+  # ==========================================
+  dashboard:
+    build: 
+      context: ./source/frontend
+      dockerfile: Dockerfile
+    container_name: echo-dashboard
+    environment:
+      - REACT_APP_API_URL=http://localhost/api
+      - REACT_APP_WS_URL=ws://localhost/ws
+    networks:
+      - echo-network
+    depends_on:
+      - backend-api
+
+  # ==========================================
+  # External System Actor
+  # ==========================================
+  seismic-simulator:
+    image: seismic-signal-simulator:multiarch_v1
+    container_name: echo-seismic-simulator
+    ports:
+      - "8080:8080" # Exposed for the broker to connect via WS/SSE
+    networks:
+      - echo-network
+
+# ==========================================
+# Global Networks & Volumes
+# ==========================================
+networks:
+  echo-network:
+    driver: bridge
+
+volumes:
+  echo-db-data:
+    driver: local
