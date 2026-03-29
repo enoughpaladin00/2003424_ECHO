@@ -1,0 +1,19 @@
+services:
+  simulator:
+    image: seismic-signal-simulator:multiarch_v1
+    ports:
+      - "8080:8080"
+
+  gateway:
+    build: ./source/gateway
+    ports:
+      - "5000:5000"
+    depends_on:
+      - simulator
+
+  dashboard:
+    build: ./source/dashboard
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
