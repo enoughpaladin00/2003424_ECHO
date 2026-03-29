@@ -1,7 +1,8 @@
 # System Description:
+ 
+**E.C.H.O. (Earthquake & Conflict Hazard Observer)** is a distributed monitoring platform that allows real-time interaction between a network of simulated seismic sensors and a centralized command dashboard, with the main purpose of detecting and classifying geopolitical threats.
 
-Not Far(m) From Home is a platform that allows a direct interaction between local farmers and consumers, with the main purpose of being “km 0”.
-The Farmers will be able to post their fresh produce in the site, and the consumers to reserve the produce and select a day for the pickup at the Agricoltural Company.
+The system will automatically process raw, high-frequency data streams to categorize anomalies into natural occurrences, conventional military conflicts, or nuclear-like events. Simultaneously, the System Administrators will be able to manage a fault-tolerant backend infrastructure to ensure continuous data routing, and the Intelligence Analysts to monitor the live feeds, filter historical data, and export strategic reports directly from the platform.
 
 ##  Defined Roles
 To write effective user stories, we can identify three primary roles based on the geopolitical scenario and the technical constraints of the project:
@@ -23,7 +24,7 @@ To write effective user stories, we can identify three primary roles based on th
 7) As a System Administrator, I want the broker to automatically attempt reconnection with exponential backoff if the simulator connection drops, ensuring data ingestion resumes seamlessly.
 8) As a System Administrator, I want the broker to implement a dead-letter queue for malformed measurements so that invalid data does not crash the processing replicas.
 9) As the System, I need to maintain an in-memory sliding window of recent time-domain measurements for each sensor to prepare the data for frequency analysis.
-10) **As the System, I need to apply a Discrete Fourier Transform (DFT) or an equivalent FFT method on the sliding window to extract dominant frequency components.**
+10) As the System, I need to apply a Discrete Fourier Transform (DFT) or an equivalent FFT method on the sliding window to extract dominant frequency components.
 11) As an Intelligence Analyst, I want the system to automatically classify an event as an "Earthquake" (0.5 to 3.0 Hz) so that natural occurrences are categorized correctly.
 12) As an Intelligence Analyst, I want the system to automatically classify an event as a "Conventional explosion" (3.0 to 8.0 Hz) so I can identify potential military conflicts.
 13) As an Intelligence Analyst, I want the system to classify an event as a "Nuclear-like event" (>= 8.0 Hz) so that I can immediately identify catastrophic strategic threats.
