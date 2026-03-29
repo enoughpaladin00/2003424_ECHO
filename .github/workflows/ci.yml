@@ -28,6 +28,12 @@ jobs:
           docker compose build dashboard backend-api processing-replica
 
       - name: Verify Nginx Configuration Syntax
-        run: |
-          echo "Testing Nginx configuration for syntax errors..."
-          docker run --rm -v ${{ github.workspace }}/gateway/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine nginx -t
+              run: |
+                echo "Testing Nginx configuration for syntax errors..."
+                # We use --add-host to trick Nginx into passing the DNS resolution check for our microservices
+                docker run --rm \
+                  --add-host echo-backend-api:127.0.0.1 \
+                  --add-host echo-dashboard:127.0.0.1 \
+                  --add-host processing-replica:127.0.0.1 \
+                  -v ${{ github.workspace }}/gateway/nginx.conf:/etc/nginx/nginx.conf:ro \
+                  nginx:alpine nginx -t
