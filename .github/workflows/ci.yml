@@ -1,0 +1,32 @@
+name: E.C.H.O infrastracture CI
+
+on:
+  pull request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    name: Validate and Build Docker Services
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          echo "Validating docker-compose.yml syntax..."
+          docker compose config -q
+        
+      - name: Build Custom Microservices
+        run: |
+          echo "Building Frontend, Backend and Processing Engine Containers..."
+          # Builds the team's custom services, ignoring the externak simulator
+          docker compose build dashboard backend-api processing-replica
+
+      - name: Verify Nginx Configuration Syntax
+        run: |
+          echo "Testing Nginx configuration syntax errors..."
+          # Runs a temporary Nginx container just to parse and validate the conf file
+          docker run --rm -v ${{ github.workspace }}/gateway/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine nginx -t
