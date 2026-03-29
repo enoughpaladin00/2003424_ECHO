@@ -1,1 +1,4 @@
-docker\ and\ documentation
+# Ignore the following files and directories
+/docker\ and\ documentation
+source/seismic-signal-simulator-oci.tar
+*.tar
