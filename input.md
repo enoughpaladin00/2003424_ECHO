@@ -46,3 +46,98 @@ To write effective user stories, we can identify three primary roles based on th
 29) As a System Administrator, I want the dashboard to require user authentication (login/password) so that unauthorized personnel cannot view sensitive strategic data.
 30) As a System Administrator, I want an audit log to record whenever an Analyst logs in or exports data so that system access is tracked.
 31) As an Intelligence Analyst, I want a button on the dashboard to export filtered historical data as a CSV or PDF report so that I can share findings with external commanders.
+
+## Event Schema
+
+This table defines the structured data payload for any seismic event processed and classified by the E.C.H.O. system. All microservices (Message Broker, Processing Replicas, Database, and Command Dashboard) must adhere to this structure.
+
+| Field Name | Data Type | Description |
+| --- |:---:| :---:|
+|`eventId` | UUID (String) | A universally unique identifier for the event. Used primarily by the database to ensure idempotency and prevent duplicate records from multiple processing replicas. |
+| `sensorId` | String | The unique identifier of the simulated sensor that detected the initial anomaly. |
+| `timestamp` | DateTime (ISO 8601) | The exact UTC timestamp of when the anomaly occurred. Used for historical indexing and time-series filtering on the dashboard. |
+| `location` | Object | The geographical coordinates of the sensor origin:`latitude` (Float), `longitude` (Float).|
+| `dominantFrequencyHz` | Float | The primary frequency extracted from the raw data stream using DFT/FFT analysis. |
+| `eventType` | Enum (String) | The classification of the event based on the dominant frequency. Allowed values: `"Earthquakes"`, `"Conventional explosion"`, `"Nuclear-like event"` |
+| `severityScore` | Float | A calculated priority score derived from the signal's amplitude, used for alert prioritization. |
+
+### JSON Payload
+```JSON
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClassifiedSeismicEvent",
+  "type": "object",
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "description": "Unique UUID for the classified event to prevent database duplication."
+    },
+    "sensorId": {
+      "type": "string",
+      "description": "Identifier of the simulated sensor."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the anomaly occurred."
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" }
+      },
+      "required": ["latitude", "longitude"]
+    },
+    "dominantFrequencyHz": {
+      "type": "number",
+      "description": "The primary frequency extracted via DFT/FFT analysis."
+    },
+    "eventType": {
+      "type": "string",
+      "enum": ["Earthquake", "Conventional explosion", "Nuclear-like event"]
+    },
+    "severityScore": {
+      "type": "number",
+      "description": "Calculated priority score based on signal amplitude."
+    }
+  },
+  "required": ["eventId", "sensorId", "timestamp", "location", "dominantFrequencyHz", "eventType", "severityScore"]
+}
+```
+
+## Rule Model
+The Rule Model defines the central logical conditions and business rules that govern how the E.C.H.O. system interprets data, triggers actions and manages infrastractures. Based on the defined user stories, the system's logic is divided into three primary domains:
+
+### A. Classification Rules (Signal Processing Engine)
+These rules are applied by the processing replicas after extracting the dominant frequency using DFT/FFT methods on the sliding window:
+
+- **IF** the dominant frequency is between 0.5 and 3.0 MHz, **THEN** the system automatically classifies the event as an "Earthquake".
+
+- **IF** the dominant frequency is between 3.0 and 8.0 MHz, **THEN** the system automatically classifies the event as an "Conventional explosion".
+
+- **IF** the dominant frequency is greater than 8.0., **THEN** the system automatically classifies the event as an "Nuclear-like event".
+
+### B: Alerting & Data Routing Rules
+These rules govern how the system handles classified data and interacts with the dashboard:
+
+- **IF** an event is classified as a "Nuclear-like event", **THEN** the dashboard must display critical visual and audio alerts.
+
+- **IF** multiple replicas analyze the exact same event, **THEN** the database insertion logic must be idempotent to prevent duplicate entries.
+
+- **IF** a raw measurement is malformed, **THEN** the broker must route it to a dead-letter queue so it does not crash the processing replicas.
+
+### C. Infrastracture & DevOps Rules
+These rules dictate the fault-tolerant behavior of the microservices infrastructure:
+
+- **IF** a processing replica receives a shutdown command from the simulator's SSE control stream, **THEN** it must self-terminate to accurately simulate node failure.
+
+- **IF** a processing replica fails an active health check, **THEN** the Gateway/Broker must automatically exclude it from the routing pool.
+
+- **IF** a new processing replica starts up, **THEN** it must automatically register itself with the Gateway/Broker to allow dynamic scaling.
+
+- **IF** the simulator connection drops, **THEN** the broker must automatically attempt reconnection using exponential backoff.
+
+- **IF** a downstream service or database becomes unresponsive, **THEN** a circuit breaker pattern must trigger to prevent a cascading failure.
+
+- **IF** an event in the database becomes older than 30 days, **THEN** an automated data-retention script must archive it daily.
