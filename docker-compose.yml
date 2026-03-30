@@ -45,7 +45,7 @@ services:
     deploy:
       replicas: 3 # Start with 3 dynamically scaling replicas
     depends_on:
-      message-broker:
+      ingestion-broker:
         condition: service_healthy
       database:
         condition: service_healthy
