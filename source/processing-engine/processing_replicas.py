@@ -25,9 +25,11 @@ from typing import Optional
 # 2. CONFIGURATION
 # ==========================================
 
-BROKER_WS_URL  = os.getenv("BROKER_WS_URL",  "ws://localhost:8000")
-SIMULATOR_URL  = os.getenv("SIMULATOR_URL",   "http://localhost:8080")
-DB_SERVICE_URL = os.getenv("DB_SERVICE_URL",  "http://persistence:8001")
+
+BROKER_WS_URL  = os.getenv("BROKER_WS_URL",  "ws://ingestion-broker:8000")
+SIMULATOR_URL  = os.getenv("SIMULATOR_URL",   "http://seismic-simulator:8080")
+DB_SERVICE_URL = os.getenv("DB_SERVICE_URL",  "http://backend-api:3000")
+
 WINDOW_SIZE    = int(os.getenv("WINDOW_SIZE", "100"))
 FFT_STEP       = int(os.getenv("FFT_STEP",    "10"))
 THRESHOLD      = float(os.getenv("THRESHOLD", "80.0"))

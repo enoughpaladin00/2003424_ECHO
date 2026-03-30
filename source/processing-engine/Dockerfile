@@ -40,11 +40,11 @@ ENV BROKER_WS_URL="ws://ingestion-broker:8000" \
     FS="20" \
     REPLICA_ID="replica-?"
 
-EXPOSE 8002
+EXPOSE 8080
 
 # Healthcheck for docker-compose and gateway
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"
 
 ENTRYPOINT ["python", "-m", "uvicorn", "processing_replicas:app", \
-            "--host", "0.0.0.0", "--port", "8002"]
+            "--host", "0.0.0.0", "--port", "8080"]
