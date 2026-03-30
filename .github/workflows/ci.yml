@@ -3,7 +3,7 @@ name: E.C.H.O. Infrastructure CI
 on:
   push:
     branches:
-      - chore/jr-gateway-pipeline
+      - main
   pull_request:
     branches:
       - main
@@ -12,28 +12,40 @@ jobs:
   build-and-test:
     name: Validate and Build Docker Services
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Mock Simulator Image
+        run: |
+          # The CI runner needs the image to exist to pass compose validation
+          docker pull alpine:latest
+          docker tag alpine:latest seismic-signal-simulator:multiarch_v1
+
       - name: Validate Docker Compose Configuration
         run: |
           echo "Validating docker-compose.yml syntax..."
-          docker compose config -q
+          # Quoting the directory path to handle spaces in the project name
+          cd "source" && docker compose config -q
 
       - name: Build Custom Microservices
         run: |
           echo "Building Frontend, Backend, and Processing Engine containers..."
-          docker compose build dashboard backend-api processing-replica
+          cd "source" && docker compose build dashboard backend-api processing-replica ingestion-broker
 
       - name: Verify Nginx Configuration Syntax
         run: |
           echo "Testing Nginx configuration for syntax errors..."
-          # We use --add-host to trick Nginx into passing the DNS resolution check for our microservices
+          # 1. Comment out the internal Docker resolver for the test
+          sed 's/resolver 127.0.0.11/# resolver 127.0.0.11/g' "${{ github.workspace }}/source/gateway/nginx.conf" > nginx_test.conf
+          
           docker run --rm \
-            --add-host echo-backend-api:127.0.0.1 \
-            --add-host echo-dashboard:127.0.0.1 \
+            --add-host backend-api:127.0.0.1 \
+            --add-host dashboard:127.0.0.1 \
             --add-host processing-replica:127.0.0.1 \
-            -v ${{ github.workspace }}/gateway/nginx.conf:/etc/nginx/nginx.conf:ro \
+            --add-host echo-dashboard:127.0.0.1 \
+            -v "$(pwd)/nginx_test.conf:/etc/nginx/nginx.conf:ro" \
             nginx:alpine nginx -t
