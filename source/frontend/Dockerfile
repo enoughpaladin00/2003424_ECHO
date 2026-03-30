@@ -1,5 +1,8 @@
-# Placeholder image to allow the infrastructure to build successfully
-FROM alpine:latest
-
-# Keeps the container alive indefinitely without consuming resources
-CMD ["tail", "-f", "/dev/null"]
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+# Usiamo start invece di build per vedere l'errore reale nel log
+CMD ["npm", "start"]
