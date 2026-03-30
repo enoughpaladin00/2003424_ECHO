@@ -22,22 +22,18 @@ services:
   # ==========================================
   # 2. Message Broker (Fabrizio Pietrobono - Ingestion & Brokerage)
   # ==========================================
-  message-broker:
-    image: rabbitmq:3-management-alpine
-    container_name: echo-message-broker
-    environment:
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: securebrokerpass
-    ports:
-      - "5672:5672"   # AMQP protocol port
-      - "15672:15672" # Management UI
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  ingestion-broker:
+      build: 
+        context: ./source/broker
+        dockerfile: Dockerfile
+      container_name: echo-ingestion-broker
+      ports:
+        - "8000:8000" # Port exposed for fan-out WebSocket communication server
+      depends_on:
+        - seismic-simulator
+      networks:
+        - echo-network
+      restart: on-failure
 
   # ==========================================
   # 3. Processing Engine (Emanuele Smisi - Signal Processing)
