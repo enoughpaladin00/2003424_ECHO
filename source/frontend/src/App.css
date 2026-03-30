@@ -1,0 +1,164 @@
+body {
+  background-color: #0d1117;
+  color: #c9d1d9;
+  font-family: 'Courier New', Courier, monospace; /* Tactical/Terminal aesthetic */
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.dashboard-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Header & Status */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 15px;
+  margin-bottom: 25px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 28px;
+  color: #58a6ff;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.status-indicator {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.status-indicator.online {
+  background-color: rgba(46, 160, 67, 0.15);
+  color: #3fb950;
+  border: 1px solid #2ea043;
+}
+
+.status-indicator.offline {
+  background-color: rgba(248, 81, 73, 0.15);
+  color: #ff7b72;
+  border: 1px solid #f85149;
+}
+
+/* Critical Alerts */
+.alerts-panel {
+  background-color: rgba(248, 81, 73, 0.1);
+  border: 2px dashed #f85149;
+  padding: 15px;
+  border-radius: 6px;
+  margin-bottom: 25px;
+}
+
+.alerts-panel h2 {
+  color: #ff7b72;
+  margin-top: 0;
+  font-size: 18px;
+}
+
+.nuclear-alert {
+  color: #ff7b72;
+  font-weight: bold;
+  list-style-type: square;
+  margin-bottom: 8px;
+}
+
+/* Layout Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 25px;
+}
+
+/* Typography for sections */
+h2 {
+  font-size: 20px;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 10px;
+  margin-top: 0;
+}
+
+/* Map Placeholder */
+.map-view {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 20px;
+}
+
+.map-placeholder {
+  height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #0d1117;
+  color: #8b949e;
+  border: 1px dashed #30363d;
+  border-radius: 4px;
+}
+
+/* Live Feed Table */
+.live-feed {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 20px;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+th, td {
+  padding: 12px 15px;
+  border-bottom: 1px solid #30363d;
+}
+
+th {
+  background-color: #0d1117;
+  color: #8b949e;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+tr.earthquake td {
+  color: #a5d6ff; /* Soft blue */
+}
+
+tr.conventional-explosion td {
+  color: #d2a8ff; /* Warning purple */
+}
+
+tr.nuclear-like-event td {
+  color: #ff7b72; /* Critical red */
+  font-weight: bold;
+  background-color: rgba(248, 81, 73, 0.05);
+}
+
+.marker-ping {
+  animation: radar-ping 0.8s ease-out forwards;
+}
+
+@keyframes radar-ping {
+  0% {
+    stroke-width: 15px;
+    stroke-opacity: 0.8;
+  }
+  100% {
+    stroke-width: 2px;
+    stroke-opacity: 0.2;
+  }
+}

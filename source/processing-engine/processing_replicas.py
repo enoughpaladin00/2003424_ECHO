@@ -145,6 +145,7 @@ class SeismicReplicaState:
         self,
         sensor_id: str,
         value: float,
+        fs: float,
         timestamp: Optional[str] = None,
         location: Optional[dict] = None,
     ) -> Optional[dict]:
@@ -176,7 +177,7 @@ class SeismicReplicaState:
 
         window_data = np.array(self.sensor_buffers[sensor_id])
         event_type, dominant_freq, magnitude, severity = analyze_seismic_window(
-            window_data, fs=self.fs, threshold=self.threshold
+            window_data, fs=fs, threshold=self.threshold
         )
 
         if event_type == EVENT_TYPE_NONE:
@@ -247,6 +248,7 @@ async def listen_to_broker() -> None:
                     value     = msg.get("value")
                     timestamp = msg.get("timestamp")
                     location  = msg.get("location")    # pass through if broker enriches it
+                    fs_rate   = float(msg.get("sampling_rate_hz", FS))
 
                     if sensor_id is None or value is None:
                         print(f"[broker] Missing required fields, skipping: {msg}")
@@ -255,6 +257,7 @@ async def listen_to_broker() -> None:
                     detection = state.process_incoming_sample(
                         sensor_id=sensor_id,
                         value=float(value),
+                        fs=fs_rate,
                         timestamp=timestamp,
                         location=location,
                     )
@@ -273,27 +276,22 @@ async def listen_to_broker() -> None:
 
 async def listen_for_shutdown() -> None:
     """
-    Listens to the simulator's SSE control stream (US-15).
-    Self-terminates the replica upon receiving a SHUTDOWN command.
+    Listens to the simulator's SSE control stream.
+    Correctly parses SSE named events (event: command \n data: {...})
     """
     url = f"{SIMULATOR_URL}/api/control"
-    SSE_PREFIX = "data:"
 
     while True:
         try:
             timeout = httpx.Timeout(None)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("GET", url) as response:
-                    async for chunk in response.aiter_text():
-                        for event in chunk.split('\n\n'):
-                            event = event.strip()
-                            if not event.startswith(SSE_PREFIX):
-                                continue
-
-                            payload_str = event[len(SSE_PREFIX):].strip()
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if line.startswith("data:"):
+                            payload_str = line[5:].strip()
                             if not payload_str:
                                 continue
-
                             try:
                                 payload = json.loads(payload_str)
                                 if payload.get("command") == "SHUTDOWN":
@@ -305,7 +303,7 @@ async def listen_for_shutdown() -> None:
         except Exception as e:
             print(f"[control] SSE stream lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
-
+            
 # ==========================================
 # 7. FASTAPI APP
 # ==========================================
