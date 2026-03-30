@@ -39,13 +39,13 @@ jobs:
       - name: Verify Nginx Configuration Syntax
         run: |
           echo "Testing Nginx configuration for syntax errors..."
-          # 1. Create a temporary config without the internal Docker resolver for the test
-          # 2. Run the test with quoted volume paths
+          # 1. Comment out the internal Docker resolver for the test
           sed 's/resolver 127.0.0.11/# resolver 127.0.0.11/g' "${{ github.workspace }}/source/gateway/nginx.conf" > nginx_test.conf
           
           docker run --rm \
-            --add-host echo-backend-api:127.0.0.1 \
-            --add-host echo-dashboard:127.0.0.1 \
+            --add-host backend-api:127.0.0.1 \
+            --add-host dashboard:127.0.0.1 \
             --add-host processing-replica:127.0.0.1 \
+            --add-host echo-dashboard:127.0.0.1 \
             -v "$(pwd)/nginx_test.conf:/etc/nginx/nginx.conf:ro" \
             nginx:alpine nginx -t
