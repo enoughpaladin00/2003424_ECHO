@@ -19,10 +19,16 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Mock Simulator Image
+        run: |
+          # The CI runner needs the image to exist to pass compose validation
+          docker pull alpine:latest
+          docker tag alpine:latest seismic-signal-simulator:multiarch_v1
+
       - name: Validate Docker Compose Configuration
         run: |
           echo "Validating docker-compose.yml syntax..."
-          # Moving into the directory with quotes to handle spaces
+          # Quoting the directory path to handle spaces in the project name
           cd "source" && docker compose config -q
 
       - name: Build Custom Microservices
@@ -33,9 +39,13 @@ jobs:
       - name: Verify Nginx Configuration Syntax
         run: |
           echo "Testing Nginx configuration for syntax errors..."
+          # 1. Create a temporary config without the internal Docker resolver for the test
+          # 2. Run the test with quoted volume paths
+          sed 's/resolver 127.0.0.11/# resolver 127.0.0.11/g' "${{ github.workspace }}/source/gateway/nginx.conf" > nginx_test.conf
+          
           docker run --rm \
             --add-host echo-backend-api:127.0.0.1 \
             --add-host echo-dashboard:127.0.0.1 \
             --add-host processing-replica:127.0.0.1 \
-            -v "${{ github.workspace }}/source/gateway/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$(pwd)/nginx_test.conf:/etc/nginx/nginx.conf:ro" \
             nginx:alpine nginx -t
