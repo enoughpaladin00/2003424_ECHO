@@ -117,7 +117,7 @@ services:
   # ==========================================
   seismic-simulator:
     image: seismic-signal-simulator:multiarch_v1
-    container_name: echo-seismic-simulator
+    container_name: echo-seismic-simulator. #
     ports:
       - "8080:8080" # Exposed for the broker to connect via WS/SSE
     networks:

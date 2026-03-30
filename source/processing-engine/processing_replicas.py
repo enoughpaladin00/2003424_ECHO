@@ -275,10 +275,6 @@ async def listen_to_broker() -> None:
             await asyncio.sleep(3)
 
 async def listen_for_shutdown() -> None:
-    """
-    Listens to the simulator's SSE control stream.
-    Correctly parses SSE named events (event: command \n data: {...})
-    """
     url = f"{SIMULATOR_URL}/api/control"
 
     while True:
@@ -286,9 +282,19 @@ async def listen_for_shutdown() -> None:
             timeout = httpx.Timeout(None)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("GET", url) as response:
+                    current_event_type = None  # traccia il tipo SSE corrente
+
                     async for line in response.aiter_lines():
                         line = line.strip()
-                        if line.startswith("data:"):
+
+                        if line.startswith("event:"):
+                            # Salva il tipo dell'evento SSE (es. "command", "heartbeat", "control-open")
+                            current_event_type = line[6:].strip()
+
+                        elif line.startswith(""):
+                            # Processa il dato SOLO se l'evento corrente è "command"
+                            if current_event_type != "command":
+                                continue
                             payload_str = line[5:].strip()
                             if not payload_str:
                                 continue
@@ -299,10 +305,15 @@ async def listen_for_shutdown() -> None:
                                     os._exit(0)
                             except json.JSONDecodeError:
                                 continue
-                                
+
+                        elif line == "":
+                            # Riga vuota = fine di un evento SSE → reset del tipo
+                            current_event_type = None
+
         except Exception as e:
             print(f"[control] SSE stream lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
+
             
 # ==========================================
 # 7. FASTAPI APP

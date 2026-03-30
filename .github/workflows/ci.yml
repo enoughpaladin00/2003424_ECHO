@@ -49,3 +49,25 @@ jobs:
             --add-host echo-dashboard:127.0.0.1 \
             -v "$(pwd)/nginx_test.conf:/etc/nginx/nginx.conf:ro" \
             nginx:alpine nginx -t
+            
+  unit-tests:
+    name: Run Python Unit Tests
+    runs-on: ubuntu-latest
+    needs: build-and-test  # parte solo se il build è andato a buon fine
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-asyncio numpy httpx
+
+      - name: Run unit tests
+        run: |
+          pytest source/tests/ -v --tb=short
