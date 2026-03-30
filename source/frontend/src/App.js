@@ -43,10 +43,10 @@ function App() {
           <MapContainer center={[45.0, 9.0]} zoom={4} style={{ height: '100%', width: '100%' }}>
             <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
             {events.map((e, index) => (
-              <Marker key={index} position={[e.lat, e.lng]}>
+              <Marker key={index} position={[e.latitude, e.longitude]}>
                 <Popup>
-                  <strong>ID Sensore: {e.sensor_id}</strong><br/>
-                  Frequenza: {e.frequency} Hz<br/>
+                  <strong>Sensor ID: {e.sensor_id}</strong><br/>
+                  Frequenza: {e.dominant_hz} Hz<br/>
                   Tipo: {e.event_type}
                 </Popup>
               </Marker>
@@ -55,7 +55,7 @@ function App() {
         </div>
 
         <div style={{ flex: '1', height: '70vh', overflowY: 'auto', border: '1px solid #333', padding: '15px' }}>
-          <h3>RILEVAMENTI REAL-TIME</h3>
+          <h3>REAL-TIME RELEVANCES</h3>
           <hr style={{ borderColor: '#333' }} />
           {events.length === 0 ? (
             <p>In ascolto di vibrazioni sismiche...</p>
@@ -65,11 +65,11 @@ function App() {
                 marginBottom: '15px', 
                 paddingBottom: '10px', 
                 borderBottom: '1px dotted #333', 
-                color: e.frequency >= 8.0 ? '#ff0000' : (e.frequency >= 3.0 ? '#ffaa00' : '#00ff00') 
+                color: e.dominant_hz >= 8.0 ? '#ff0000' : (e.dominant_hz >= 3.0 ? '#ffaa00' : '#00ff00') 
               }}>
-                <small>[{e.timestamp || 'RECENTE'}]</small><br/>
+                <small>[{e.timestamp || 'RECENTS'}]</small><br/>
                 <strong>{e.sensor_id}</strong> - {e.event_type}<br/>
-                Freq: {e.frequency} Hz
+                Freq: {e.dominant_hz} Hz
               </div>
             ))
           )}

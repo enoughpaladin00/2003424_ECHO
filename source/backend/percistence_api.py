@@ -6,6 +6,7 @@ from typing import Optional
 
 import asyncpg
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 
 # ==========================================
@@ -42,10 +43,11 @@ CREATE TABLE IF NOT EXISTS seismic_events (
 # ==========================================
 # LIFESPAN
 # ==========================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
-    # Retry loop — Postgres may not be ready immediately even with healthcheck
+    print(f"[db] Connecting to {DB_HOST}...")
     for attempt in range(10):
         try:
             db_pool = await asyncpg.create_pool(
@@ -73,7 +75,17 @@ async def lifespan(app: FastAPI):
 # ==========================================
 # FASTAPI APP
 # ==========================================
+
 app = FastAPI(title="E.C.H.O. Persistence Layer", lifespan=lifespan)
+
+# Add CORS so the Dashboard (Frontend) can talk to this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ==========================================
 # PYDANTIC MODEL
@@ -108,8 +120,21 @@ VALUES
     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (event_id) DO NOTHING;
 """
+@app.get("/api/events")
+async def get_events(limit: int = 50):
+    """
+    Returns the most recent classified seismic events for the dashboard.
+    """
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            'SELECT event_id, sensor_id, event_type, dominant_hz, latitude, longitude, severity_score, timestamp '
+            'FROM seismic_events ORDER BY timestamp DESC LIMIT $1',
+            limit
+        )
+        # Convert record objects to a list of dictionaries for JSON serialization
+        return [dict(row) for row in rows]
 
-@app.post("/events", status_code=status.HTTP_201_CREATED)
+@app.post("/api/events", status_code=status.HTTP_201_CREATED)
 async def create_event(event: SeismicEventIn):
     async with db_pool.acquire() as conn:
         await conn.execute(
@@ -127,8 +152,7 @@ async def create_event(event: SeismicEventIn):
         )
     return {"status": "accepted"}
 
-
-@app.get("/health", status_code=status.HTTP_200_OK)
+@app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health():
     """Healthcheck endpoint — also verifies DB connectivity."""
     try:
