@@ -20,12 +20,12 @@ jobs:
       - name: Validate Docker Compose Configuration
         run: |
           echo "Validating docker-compose.yml syntax..."
-          docker compose config -q
+          cd source && docker compose config -q
 
       - name: Build Custom Microservices
         run: |
           echo "Building Frontend, Backend, and Processing Engine containers..."
-          docker compose build dashboard backend-api processing-replica
+          cd source && docker compose build dashboard backend-api processing-replica ingestion-broker
 
       - name: Verify Nginx Configuration Syntax
         run: |
