@@ -46,7 +46,7 @@ services:
       replicas: 3 # Start with 3 dynamically scaling replicas
     depends_on:
       ingestion-broker:
-        condition: service_healthy
+        condition: service_started
       database:
         condition: service_healthy
     networks:
