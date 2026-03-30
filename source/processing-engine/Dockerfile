@@ -10,7 +10,7 @@ WORKDIR /app
 
 # Install build deps (numpy needs gcc on slim)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    gcc curl\
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies first (layer caching)

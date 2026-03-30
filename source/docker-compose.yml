@@ -51,6 +51,8 @@ services:
         condition: service_healthy
     networks:
       - echo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
     restart: on-failure
 
   # ==========================================
@@ -107,6 +109,7 @@ services:
     environment:
       - REACT_APP_API_URL=http://localhost/api
       - REACT_APP_WS_URL=ws://localhost/ws
+      - WDS_SOCKET_PORT=0
     networks:
       - echo-network
     depends_on:

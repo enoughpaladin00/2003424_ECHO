@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -39,6 +39,31 @@ CREATE TABLE IF NOT EXISTS seismic_events (
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 """
+
+# ==========================================
+# WEBSOCKET MANAGER
+# ==========================================
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                # Handle stale connections
+                pass
+
+manager = ConnectionManager()
 
 # ==========================================
 # LIFESPAN
@@ -120,6 +145,41 @@ VALUES
     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (event_id) DO NOTHING;
 """
+
+@app.websocket("/api/ws/events")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.post("/api/events", status_code=status.HTTP_201_CREATED)
+async def create_event(event: SeismicEventIn):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            INSERT_SQL,
+            event.event_id, event.sensor_id, event.event_type, event.dominant_hz,
+            event.location.latitude, event.location.longitude,
+            event.magnitude, event.severity_score, event.timestamp, event.replica_id
+        )
+    
+    broadcast_data = {
+        "event_id": event.event_id,
+        "sensor_id": event.sensor_id,
+        "event_type": event.event_type,
+        "dominant_hz": event.dominant_hz,
+        "latitude": event.location.latitude,
+        "longitude": event.location.longitude,
+        "severity_score": event.severity_score,
+        "timestamp": event.timestamp.isoformat()
+    }
+    print(f"[ws] Broadcasting event {event.event_id} to {len(manager.active_connections)} clients")
+    await manager.broadcast(broadcast_data)
+    
+    return {"status": "accepted"}
+
 @app.get("/api/events")
 async def get_events(limit: int = 50):
     """
@@ -131,26 +191,7 @@ async def get_events(limit: int = 50):
             'FROM seismic_events ORDER BY timestamp DESC LIMIT $1',
             limit
         )
-        # Convert record objects to a list of dictionaries for JSON serialization
         return [dict(row) for row in rows]
-
-@app.post("/api/events", status_code=status.HTTP_201_CREATED)
-async def create_event(event: SeismicEventIn):
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            INSERT_SQL,
-            event.event_id,
-            event.sensor_id,
-            event.event_type,
-            event.dominant_hz,
-            event.location.latitude,
-            event.location.longitude,
-            event.magnitude,
-            event.severity_score,
-            event.timestamp,
-            event.replica_id,
-        )
-    return {"status": "accepted"}
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 async def health():
