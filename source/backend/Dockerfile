@@ -1,8 +1,16 @@
-# Placeholder image to allow the infrastructure to build successfully
-FROM alpine:latest
+FROM python:3.11-slim
 
-# Install curl so the Docker healthcheck command doesn't fail
-RUN apk add --no-cache curl
+WORKDIR /app
 
-# Use a tiny loop with netcat (nc) to fake a continuous HTTP 200 OK response on port 3000
-CMD while true; do echo -e "HTTP/1.1 200 OK\n\nOK" | nc -l -p 3000; done
+# Install curl so the docker-compose healthcheck can run
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements and install them
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the actual Python application
+COPY percistence_api.py .
+
+# Run the FastAPI server via Uvicorn
+CMD ["uvicorn", "percistence_api:app", "--host", "0.0.0.0", "--port", "3000"]

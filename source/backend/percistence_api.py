@@ -25,16 +25,17 @@ db_pool: asyncpg.Pool = None
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS seismic_events (
     id              SERIAL PRIMARY KEY,
-    event_id        VARCHAR(64),
+    event_id        VARCHAR(64)   UNIQUE NOT NULL,
     sensor_id       VARCHAR(64)   NOT NULL,
     event_type      VARCHAR(64)   NOT NULL,
-    dominant_hz     FLOAT,
+    dominant_hz     FLOAT         NOT NULL,
+    latitude        FLOAT         NOT NULL,
+    longitude       FLOAT         NOT NULL,
     magnitude       FLOAT,
-    severity_score  FLOAT,
+    severity_score  FLOAT         NOT NULL,
     timestamp       TIMESTAMPTZ   NOT NULL,
     replica_id      VARCHAR(64),
-    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    UNIQUE (sensor_id, timestamp)
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 """
 
@@ -62,7 +63,7 @@ async def lifespan(app: FastAPI):
 
     async with db_pool.acquire() as conn:
         await conn.execute(CREATE_TABLE_SQL)
-    print("[db] Table ready.")
+        print("[db] Table ready.")
 
     yield
 
@@ -78,27 +79,34 @@ app = FastAPI(title="E.C.H.O. Persistence Layer", lifespan=lifespan)
 # PYDANTIC MODEL
 # Accepts both camelCase (from processing engine) and snake_case
 # ==========================================
+class Location(BaseModel):
+    latitude: float
+    longitude: float
+
 class SeismicEventIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    event_id:       Optional[str]      = Field(None,  alias="eventId")
-    sensor_id:      str                = Field(...,   alias="sensorId")
-    event_type:     str                = Field(...,   alias="eventType")
-    dominant_hz:    Optional[float]    = Field(None,  alias="dominantFrequencyHz")
-    magnitude:      Optional[float]    = Field(None,  alias="_rawMagnitude")
-    severity_score: Optional[float]    = Field(None,  alias="severityScore")
+    event_id:       str                = Field(..., alias="eventId")
+    sensor_id:      str                = Field(..., alias="sensorId")
+    event_type:     str                = Field(..., alias="eventType")
+    dominant_hz:    float              = Field(..., alias="dominantFrequencyHz")
+    location:       Location
     timestamp:      datetime
-    replica_id:     Optional[str]      = Field(None,  alias="_replicaId")
+    severity_score: float              = Field(..., alias="severityScore")
+    
+    # Optional debugging fields
+    magnitude:      Optional[float]    = Field(None, alias="_rawMagnitude")
+    replica_id:     Optional[str]      = Field(None, alias="_replicaId")
 
 # ==========================================
 # ENDPOINTS
 # ==========================================
 INSERT_SQL = """
 INSERT INTO seismic_events
-    (event_id, sensor_id, event_type, dominant_hz, magnitude, severity_score, timestamp, replica_id)
+    (event_id, sensor_id, event_type, dominant_hz, latitude, longitude, magnitude, severity_score, timestamp, replica_id)
 VALUES
-    ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (sensor_id, timestamp) DO NOTHING;
+    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (event_id) DO NOTHING;
 """
 
 @app.post("/events", status_code=status.HTTP_201_CREATED)
@@ -110,6 +118,8 @@ async def create_event(event: SeismicEventIn):
             event.sensor_id,
             event.event_type,
             event.dominant_hz,
+            event.location.latitude,
+            event.location.longitude,
             event.magnitude,
             event.severity_score,
             event.timestamp,
