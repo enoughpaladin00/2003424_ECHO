@@ -271,44 +271,40 @@ async def listen_to_broker() -> None:
             print(f"[broker] Connection lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
 
-
 async def listen_for_shutdown() -> None:
     """
     Listens to the simulator's SSE control stream (US-15).
     Self-terminates the replica upon receiving a SHUTDOWN command.
-
-    SSE lines have the format:
-         {"command": "SHUTDOWN"}
-    The prefix is literally the 5 characters 'd','a','t','a',':'
     """
     url = f"{SIMULATOR_URL}/api/control"
-    SSE_PREFIX = "data:"          # explicit string constant — avoids invisible char bugs
+    SSE_PREFIX = "data:"
 
     while True:
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            timeout = httpx.Timeout(None)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("GET", url) as response:
-                    async for line in response.aiter_lines():
-                        if not line.startswith(SSE_PREFIX):
-                            continue
+                    async for chunk in response.aiter_text():
+                        for event in chunk.split('\n\n'):
+                            event = event.strip()
+                            if not event.startswith(SSE_PREFIX):
+                                continue
 
-                        payload_str = line[len(SSE_PREFIX):].strip()
-                        if not payload_str:
-                            continue
+                            payload_str = event[len(SSE_PREFIX):].strip()
+                            if not payload_str:
+                                continue
 
-                        try:
-                            payload = json.loads(payload_str)
-                        except json.JSONDecodeError:
-                            continue
-
-                        if payload.get("command") == "SHUTDOWN":
-                            print("[control] SHUTDOWN received. Terminating replica.")
-                            os._exit(0)
-
+                            try:
+                                payload = json.loads(payload_str)
+                                if payload.get("command") == "SHUTDOWN":
+                                    print("[control] SHUTDOWN received. Terminating replica.")
+                                    os._exit(0)
+                            except json.JSONDecodeError:
+                                continue
+                                
         except Exception as e:
             print(f"[control] SSE stream lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
-
 
 # ==========================================
 # 7. FASTAPI APP
@@ -335,4 +331,4 @@ def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run("processing_replicas:app", host="0.0.0.0", port=8002, reload=False)
+    uvicorn.run("processing_replicas:app", host="0.0.0.0", port=8080, reload=False)
