@@ -24,7 +24,7 @@ services:
   # ==========================================
   ingestion-broker:
       build: 
-        context: ./source/broker
+        context: ./source/ingestion_broker
         dockerfile: Dockerfile
       container_name: echo-ingestion-broker
       ports:
