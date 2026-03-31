@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS seismic_events_archive (
     created_at TIMESTAMPTZ NOT NULL,
     archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- US-30: Audit log for login and export events
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    action VARCHAR(64) NOT NULL,
+    username VARCHAR(128) NOT NULL,
+    detail TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 
@@ -161,8 +170,8 @@ class SeismicEventIn(BaseModel):
     timestamp:      datetime
     severity_score: float              = Field(..., alias="severityScore")
     
-    magnitude:      Optional[float]    = Field(None, alias="_rawMagnitude")
-    replica_id:     Optional[str]      = Field(None, alias="_replicaId")
+    magnitude:      Optional[float]    = Field(None, alias="rawMagnitude")
+    replica_id:     Optional[str]      = Field(None, alias="replicaId")
 
 # ==========================================
 # ENDPOINTS
@@ -336,6 +345,34 @@ async def run_data_retention() -> None:
 
 
 
+
+
+# ==========================================
+# AUDIT LOG (US-30)
+# ==========================================
+
+class AuditLogIn(BaseModel):
+    action:   str
+    username: str
+    detail:   Optional[str] = None
+
+@app.post("/audit", status_code=status.HTTP_201_CREATED)
+async def create_audit_log(entry: AuditLogIn):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO audit_logs (action, username, detail) VALUES ($1, $2, $3)",
+            entry.action, entry.username, entry.detail,
+        )
+    return {"status": "logged"}
+
+@app.get("/audit")
+async def get_audit_logs(limit: int = 100, offset: int = 0):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, action, username, detail, created_at FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            limit, offset,
+        )
+    return [dict(row) for row in rows]
 
 
 # Added both routes to ensure Nginx trailing slash proxy rules don't cause 404s

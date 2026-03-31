@@ -306,7 +306,7 @@ async def listen_for_shutdown() -> None:
                         if line.startswith("event:"):
                             current_event_type = line[6:].strip()
 
-                        elif line.startswith(""):
+                        elif line.startswith("data:"):
                             if current_event_type != "command":
                                 continue
                             payload_str = line[5:].strip()
