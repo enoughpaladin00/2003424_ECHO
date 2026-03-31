@@ -122,6 +122,10 @@ const Dashboard = ({ username, onLogout }) => {
   const [connectionStatus, setConnectionStatus] = useState('Connecting...');
   const [lastUpdate, setLastUpdate] = useState(null);
 
+  // Live feed filters (US-28)
+  const [liveSensor, setLiveSensor] = useState('');
+  const [liveType, setLiveType] = useState('');
+
   // History / filters
   const [filterSensor, setFilterSensor] = useState('');
   const [filterType, setFilterType] = useState('');
@@ -207,6 +211,11 @@ const Dashboard = ({ username, onLogout }) => {
     a.href = URL.createObjectURL(blob);
     a.download = `echo_report_${Date.now()}.csv`;
     a.click();
+    fetch(`${API_URL}/audit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'export_csv', username: username, detail: `Exported ${historyEvents.length} events` }),
+    }).catch(() => {});
   };
 
   const isOnline = connectionStatus === 'Connected';
@@ -258,6 +267,28 @@ const Dashboard = ({ username, onLogout }) => {
               WebSocket: {isOnline ? 'Connected (Live)' : 'Disconnected'}
             </span>
           </div>
+
+          {/* US-28: Live feed filters */}
+          <div className="filter-panel">
+            <select value={liveSensor} onChange={e => setLiveSensor(e.target.value)}>
+              <option value="">All Sensors</option>
+              {[...new Set(liveEvents.map(e => e.sensorId))].map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <select value={liveType} onChange={e => setLiveType(e.target.value)}>
+              <option value="">All Event Types</option>
+              <option value="Earthquake">Earthquake</option>
+              <option value="Conventional explosion">Conventional explosion</option>
+              <option value="Nuclear-like event">Nuclear-like event</option>
+            </select>
+            {(liveSensor || liveType) && (
+              <button className="btn-search" onClick={() => { setLiveSensor(''); setLiveType(''); }}>
+                Clear Filters
+              </button>
+            )}
+          </div>
+
           <div className="table-wrapper">
             <table>
               <thead>
@@ -270,7 +301,9 @@ const Dashboard = ({ username, onLogout }) => {
                 {liveEvents.length === 0 && (
                   <tr><td colSpan={6} className="empty-row">Waiting for events...</td></tr>
                 )}
-                {liveEvents.map((evt, i) => (
+                {liveEvents
+                  .filter(evt => (!liveSensor || evt.sensorId === liveSensor) && (!liveType || evt.eventType === liveType))
+                  .map((evt, i) => (
                   <tr key={i} className={getRowClass(evt.eventType)}>
                     <td>{new Date(evt.timestamp).toLocaleTimeString()} {i === 0 && <span className="new-badge">NEW</span>}</td>
                     <td>{evt.sensorId}</td>
@@ -410,6 +443,11 @@ const App = () => {
   const handleLogin = (user) => {
     sessionStorage.setItem('echo_user', user);
     setUsername(user);
+    fetch(`${API_URL}/audit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login', username: user, detail: 'Dashboard login' }),
+    }).catch(() => {});
   };
 
   const handleLogout = () => {

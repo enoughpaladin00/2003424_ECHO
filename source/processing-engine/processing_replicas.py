@@ -153,9 +153,17 @@ class SeismicReplicaState:
         self._last_emitted[sensor_id] = now
 
         sample_ts = timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        ts_seed = sample_ts[:19]
+        # Round to 10-second bucket so all replicas produce the same eventId
+        # for the same physical event, regardless of FFT trigger offset
+        from datetime import datetime as _dt
+        try:
+            dt = _dt.fromisoformat(sample_ts.replace("Z", "+00:00"))
+            bucketed = dt.replace(second=(dt.second // 10) * 10, microsecond=0)
+            ts_seed = bucketed.strftime("%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            ts_seed = sample_ts[:19]
         return {
-            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{sensor_id}{ts_seed}")),
+            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{sensor_id}{ts_seed}{event_type}")),
             "sensorId":           sensor_id,
             "timestamp":          sample_ts,
             "location":           location or {"latitude": 0.0, "longitude": 0.0},
@@ -176,7 +184,7 @@ state = SeismicReplicaState(
     fs=FS,
     threshold=THRESHOLD,
     step=FFT_STEP,
-    cooldown_seconds=5.0   # ← NUOVO: 1 detection ogni 5s per sensore
+    cooldown_seconds=10.0  # match 10s event-ID bucket to prevent duplicate detections
 )
 
 
@@ -306,7 +314,7 @@ async def listen_for_shutdown() -> None:
                         if line.startswith("event:"):
                             current_event_type = line[6:].strip()
 
-                        elif line.startswith(""):
+                        elif line.startswith("data:"):
                             if current_event_type != "command":
                                 continue
                             payload_str = line[5:].strip()
