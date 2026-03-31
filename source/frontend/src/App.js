@@ -2,6 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 import SeismicMap from './SeismicMap';
 
+// Stati per la UI del Live Feed
+  const [liveFilterType, setLiveFilterType] = useState('');
+  const [liveFilterSensor, setLiveFilterSensor] = useState('');
+
+  // Refs per far leggere i valori aggiornati al WebSocket
+  const filterTypeRef = useRef(liveFilterType);
+  const filterSensorRef = useRef(liveFilterSensor);
+
+
+
+
+
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost/api';
 const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost/ws';
 const PAGE_SIZE = 20;
@@ -19,20 +31,40 @@ const getRiskBadge = (t) => {
   return <span className="badge badge-earthquake">🟢 LOW</span>;
 };
 
+
+// Aggiungi questa funzione SUBITO DOPO l'import, prima di LoginPage
+const logAudit = async (username, action, detail) => {
+  try {
+    await fetch('/api/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, action, detail })
+    });
+  } catch (e) {
+    console.warn('[audit] failed to log:', e);
+  }
+};
+
+
 // ── Login page ────────────────────────────────────────────
 const LoginPage = ({ onLogin }) => {
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
   const [err, setErr] = useState('');
 
-  const handleSubmit = (e) => {
+const handleSubmit = (e) => {
     e.preventDefault();
     if (user === 'analyst' && pass === 'echo2026') {
+      // US-30: log the login
+      logAudit(user, 'login', 'Dashboard access');
       onLogin(user);
     } else {
       setErr('Invalid credentials. Access denied.');
+      // Opzionale: log anche il fallimento del login
+      logAudit(user, 'login_failed', 'Invalid credentials');
     }
-  };
+};
+
 
   return (
     <div className="login-page">
@@ -143,9 +175,13 @@ const Dashboard = ({ username, onLogout }) => {
         setConnectionStatus('Disconnected. Reconnecting...');
         reconnectTimer = setTimeout(connect, 3000);
       };
+      filterTypeRef.current = liveFilterType;
+      filterSensorRef.current = liveFilterSensor;
       ws.onmessage = (msg) => {
         try {
           const evt = JSON.parse(msg.data);
+          if (filterSensor && evt.sensor_id !== filterSensor) return;
+          if (filterType && evt.event_type !== filterType) return;
           setLiveEvents(prev => [evt, ...prev].slice(0, 100));
           setLastUpdate(new Date());
           // US-24: nuclear modal
@@ -159,7 +195,9 @@ const Dashboard = ({ username, onLogout }) => {
     };
     connect();
     return () => { clearTimeout(reconnectTimer); ws?.close(); };
-  }, []);
+  }, [filterTypeRef, filterSensorRef]);
+
+
 
   // US-26/28: fetch history
   const fetchHistory = useCallback(async (page = 0) => {
@@ -196,18 +234,38 @@ const Dashboard = ({ username, onLogout }) => {
   };
 
   // US-31: CSV export
-  const exportCSV = () => {
-    const headers = ['event_id','sensor_id','event_type','dominant_hz','severity_score','latitude','longitude','timestamp'];
-    const rows = historyEvents.map(e =>
-      [e.event_id, e.sensor_id, e.event_type, e.dominant_hz, e.severity_score, e.latitude, e.longitude, e.timestamp]
-    );
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `echo_report_${Date.now()}.csv`;
-    a.click();
-  };
+const exportCSV = () => {
+    if (!historyEvents || historyEvents.length === 0) {
+      alert("Nessun dato disponibile per l'esportazione.");
+      return;
+    }
+
+    const headers = ["Timestamp", "Sensor ID", "Event Type", "Frequency (Hz)", "Severity Score", "Latitude", "Longitude"];
+    const rows = historyEvents.map(evt => [
+      new Date(evt.timestamp).toISOString(),
+      evt.sensor_id,
+      evt.event_type,
+      evt.dominant_hz?.toFixed(2),
+      evt.severity_score,
+      evt.latitude,
+      evt.longitude
+    ]);
+
+    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `echo_export_${new Date().getTime()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // US-30: log the export
+    const user = sessionStorage.getItem('echo_user') || 'unknown';
+    logAudit(user, 'export_csv', `Exported ${historyEvents.length} events`);
+};
+
 
   const isOnline = connectionStatus === 'Connected';
   const totalPages = Math.max(1, Math.ceil(historyCount / PAGE_SIZE));
@@ -412,10 +470,14 @@ const App = () => {
     setUsername(user);
   };
 
-  const handleLogout = () => {
+const handleLogout = () => {
+    // US-30: log the logout
+    logAudit(username, 'logout', 'User session closed');
+    
     sessionStorage.removeItem('echo_user');
     setUsername(null);
-  };
+};
+
 
   if (!username) return <LoginPage onLogin={handleLogin} />;
   return <Dashboard username={username} onLogout={handleLogout} />;

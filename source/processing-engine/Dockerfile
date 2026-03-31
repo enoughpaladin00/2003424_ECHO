@@ -44,7 +44,7 @@ EXPOSE 8080
 
 # Healthcheck for docker-compose and gateway
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
 
 ENTRYPOINT ["python", "-m", "uvicorn", "processing_replicas:app", \
             "--host", "0.0.0.0", "--port", "8080"]

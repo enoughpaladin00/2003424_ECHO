@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, Field, ConfigDict
  
 
@@ -101,7 +101,21 @@ CREATE TABLE IF NOT EXISTS seismic_events_archive (
     created_at TIMESTAMPTZ NOT NULL,
     archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+
+-- US-30: Audit log for login and export tracking
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          SERIAL PRIMARY KEY,
+    username    VARCHAR(64)  NOT NULL,
+    action      VARCHAR(64)  NOT NULL,
+    detail      TEXT,
+    ip_address  VARCHAR(45),
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at DESC);
 """
+
+
 
 
 
@@ -163,6 +177,19 @@ class SeismicEventIn(BaseModel):
     
     magnitude:      Optional[float]    = Field(None, alias="_rawMagnitude")
     replica_id:     Optional[str]      = Field(None, alias="_replicaId")
+
+
+
+# ==========================================
+# AUDIT MODEL (US-30)
+# ==========================================
+class AuditEntry(BaseModel):
+    username:   str
+    action:     str
+    detail:     Optional[str] = None
+
+
+
 
 # ==========================================
 # ENDPOINTS
@@ -336,6 +363,31 @@ async def run_data_retention() -> None:
 
 
 
+# ==========================================
+# AUDIT ENDPOINTS (US-30)
+# ==========================================
+INSERT_AUDIT_SQL = """
+INSERT INTO audit_log (username, action, detail, ip_address)
+VALUES ($1, $2, $3, $4)
+"""
+
+@app.post("/audit", status_code=status.HTTP_201_CREATED)
+async def create_audit_entry(entry: AuditEntry, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    async with db_pool.acquire() as conn:
+        await conn.execute(INSERT_AUDIT_SQL, entry.username, entry.action, entry.detail, ip)
+    print(f"[audit] {entry.username:12} | {entry.action:15} | {ip}")
+    return {"status": "logged"}
+
+@app.get("/audit", status_code=status.HTTP_200_OK)
+async def get_audit_log(limit: int = 100):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT username, action, detail, ip_address, created_at "
+            "FROM audit_log ORDER BY created_at DESC LIMIT $1",
+            limit,
+        )
+    return [dict(r) for r in rows]
 
 
 # Added both routes to ensure Nginx trailing slash proxy rules don't cause 404s

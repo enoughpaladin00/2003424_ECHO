@@ -112,9 +112,9 @@ The Rule Model defines the central logical conditions and business rules that go
 ### A. Classification Rules (Signal Processing Engine)
 These rules are applied by the processing replicas after extracting the dominant frequency using DFT/FFT methods on the sliding window:
 
-- **IF** the dominant frequency is between 0.5 and 3.0 MHz, **THEN** the system automatically classifies the event as an "Earthquake".
+- **IF** the dominant frequency is between 0.5 and 3.0 Hz, **THEN** the system automatically classifies the event as an "Earthquake".
 
-- **IF** the dominant frequency is between 3.0 and 8.0 MHz, **THEN** the system automatically classifies the event as an "Conventional explosion".
+- **IF** the dominant frequency is between 3.0 and 8.0 Hz, **THEN** the system automatically classifies the event as an "Conventional explosion".
 
 - **IF** the dominant frequency is greater than 8.0., **THEN** the system automatically classifies the event as an "Nuclear-like event".
 
