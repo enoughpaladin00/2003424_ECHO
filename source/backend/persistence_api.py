@@ -1,12 +1,14 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 import asyncpg
 from fastapi import FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ConfigDict
+ 
+
 
 # ==========================================
 # CONFIGURATION
@@ -52,20 +54,57 @@ manager = ConnectionManager()
 # ==========================================
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS seismic_events (
-    id              SERIAL PRIMARY KEY,
-    event_id        VARCHAR(64)   UNIQUE NOT NULL,
-    sensor_id       VARCHAR(64)   NOT NULL,
-    event_type      VARCHAR(64)   NOT NULL,
-    dominant_hz     FLOAT         NOT NULL,
-    latitude        FLOAT         NOT NULL,
-    longitude       FLOAT         NOT NULL,
-    magnitude       FLOAT,
-    severity_score  FLOAT         NOT NULL,
-    timestamp       TIMESTAMPTZ   NOT NULL,
-    replica_id      VARCHAR(64),
-    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id SERIAL PRIMARY KEY,
+    event_id VARCHAR(64) UNIQUE NOT NULL,
+    sensor_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    dominant_hz FLOAT NOT NULL,
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    magnitude FLOAT,
+    severity_score FLOAT NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    replica_id VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- US-21: Index on timestamp for historical queries and time-series filtering
+CREATE INDEX IF NOT EXISTS idx_seismic_events_timestamp
+    ON seismic_events (timestamp DESC);
+
+-- US-21: Index on sensor_id for sensor-based filtering (US-26/28)
+CREATE INDEX IF NOT EXISTS idx_seismic_events_sensor_id
+    ON seismic_events (sensor_id);
+
+-- US-21: Index on event_type for type-based filtering (US-26/28)
+CREATE INDEX IF NOT EXISTS idx_seismic_events_event_type
+    ON seismic_events (event_type);
+
+-- US-21: Composite index on lat/lon for geographic queries
+CREATE INDEX IF NOT EXISTS idx_seismic_events_location
+    ON seismic_events (latitude, longitude);
+
+
+-- US-22: archive table for events older than 30 days
+CREATE TABLE IF NOT EXISTS seismic_events_archive (
+    id SERIAL PRIMARY KEY,
+    event_id VARCHAR(64) UNIQUE NOT NULL,
+    sensor_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    dominant_hz FLOAT NOT NULL,
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    magnitude FLOAT,
+    severity_score FLOAT NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    replica_id VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL,
+    archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+
+
 
 # ==========================================
 # LIFESPAN
@@ -91,6 +130,8 @@ async def lifespan(app: FastAPI):
     async with db_pool.acquire() as conn:
         await conn.execute(CREATE_TABLE_SQL)
         print("[db] Table ready.")
+        asyncio.create_task(run_data_retention(), name="data-retention")  # ← add this
+
 
     yield
 
@@ -159,6 +200,143 @@ async def create_event(event: SeismicEventIn):
         await manager.broadcast_event(event_payload)
 
     return {"status": "accepted"}
+
+
+# ==========================================
+# QUERY ENDPOINTS (US-26, US-28)
+# ==========================================
+
+@app.get("/events")
+async def get_events(
+    sensor_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """
+    Returns historical seismic events with optional filters.
+    Supports filtering by sensor_id, event_type, and date range.
+    Used by the dashboard for historical inspection (US-26) and
+    targeted analysis by region/type (US-28).
+    """
+    conditions = []
+    params = []
+    idx = 1
+
+    if sensor_id:
+        conditions.append(f"sensor_id = ${idx}")
+        params.append(sensor_id)
+        idx += 1
+
+    if event_type:
+        conditions.append(f"event_type = ${idx}")
+        params.append(event_type)
+        idx += 1
+
+    if from_date:
+        conditions.append(f"timestamp >= ${idx}")
+        params.append(from_date)
+        idx += 1
+
+    if to_date:
+        conditions.append(f"timestamp <= ${idx}")
+        params.append(to_date)
+        idx += 1
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    query = f"""
+        SELECT event_id, sensor_id, event_type, dominant_hz,
+               latitude, longitude, severity_score, timestamp, replica_id
+        FROM seismic_events
+        {where_clause}
+        ORDER BY timestamp DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """
+    params.extend([limit, offset])
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+
+    return [dict(row) for row in rows]
+
+
+
+@app.get("/events/count")
+async def count_events(
+    sensor_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+):
+    """
+    Returns the total count of events matching the given filters.
+    Used by the dashboard for pagination (US-26).
+    """
+    conditions = []
+    params = []
+    idx = 1
+
+    if sensor_id:
+        conditions.append(f"sensor_id = ${idx}")
+        params.append(sensor_id)
+        idx += 1
+
+    if event_type:
+        conditions.append(f"event_type = ${idx}")
+        params.append(event_type)
+        idx += 1
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    query = f"SELECT COUNT(*) FROM seismic_events {where_clause}"
+
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval(query, *params)
+
+    return {"count": count}
+
+
+# ==========================================
+# DATA RETENTION (US-22)
+# ==========================================
+
+async def run_data_retention() -> None:
+    while True:
+        now = datetime.now(timezone.utc)
+        tomorrow = now + timedelta(days=1)
+        next_midnight = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
+        wait_seconds = (next_midnight - now).total_seconds()
+        print(f"[retention] Next run in {wait_seconds/3600:.1f} hours (at midnight UTC).")
+        await asyncio.sleep(wait_seconds)
+
+        try:
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    archived = await conn.execute("""
+                        INSERT INTO seismic_events_archive
+                            (event_id, sensor_id, event_type, dominant_hz,
+                             latitude, longitude, magnitude, severity_score,
+                             timestamp, replica_id, created_at)
+                        SELECT
+                            event_id, sensor_id, event_type, dominant_hz,
+                            latitude, longitude, magnitude, severity_score,
+                            timestamp, replica_id, created_at
+                        FROM seismic_events
+                        WHERE timestamp < NOW() - INTERVAL '30 days'
+                        ON CONFLICT (event_id) DO NOTHING;
+                    """)
+                    deleted = await conn.execute("""
+                        DELETE FROM seismic_events
+                        WHERE timestamp < NOW() - INTERVAL '30 days';
+                    """)
+                    print(f"[retention] Archived: {archived} | Deleted from active: {deleted}")
+
+        except Exception as e:
+            print(f"[retention] Error during data retention run: {e}")
+
+
+
+
 
 # Added both routes to ensure Nginx trailing slash proxy rules don't cause 404s
 @app.websocket("/ws")

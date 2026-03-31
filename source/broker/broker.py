@@ -253,22 +253,33 @@ async def sensor_ingestion_loop(
 
 async def replica_handler(websocket) -> None:
     """
-    Accepts an incoming WebSocket connection from a processing replica (US-6, US-17).
-    Registers it in _active_replicas and keeps the connection alive.
-    Replicas are receive-only consumers; any messages they send are silently ignored.
+    Accepts an incoming WebSocket connection from a processing replica.
+    Registers it in _active_replicas and runs an active ping loop.
+    If the replica stops responding, it is removed from the pool (US-16).
     """
     replica_addr = websocket.remote_address
     logger.info(f"[Server] New replica connected: {replica_addr}")
     _active_replicas.add(websocket)
 
     try:
-        async for _ in websocket:
-            pass
-    except websockets.ConnectionClosed:
-        pass
+        while True:
+            try:
+                pong_waiter = await websocket.ping()
+                await asyncio.wait_for(pong_waiter, timeout=10.0)
+                logger.debug(f"[health] Replica {replica_addr} — pong received ✓")
+            except (asyncio.TimeoutError, websockets.ConnectionClosed):
+                logger.warning(
+                    f"[health] Replica {replica_addr} failed health-check — removing from pool."
+                )
+                break
+
+            await asyncio.sleep(15)
+
     finally:
-        _active_replicas.discard(websocket)   # discard: safe even if already removed
-        logger.warning(f"[Server] Replica disconnected: {replica_addr}")
+        _active_replicas.discard(websocket)
+        logger.warning(f"[Server] Replica removed from pool: {replica_addr}")
+
+
 
 
 async def fanout_dispatcher(output_queue: asyncio.Queue) -> None:
