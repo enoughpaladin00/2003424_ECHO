@@ -1,7 +1,7 @@
 services:
-  # ==========================================
-  # 1. API Gateway (Jacopo Rossi - DevOps/Infrastructure)
-  # ==========================================
+# ==========================================
+# 1. API Gateway
+# ==========================================
   api-gateway:
     image: nginx:alpine
     container_name: echo-api-gateway
@@ -19,31 +19,37 @@ services:
       - echo-network
     restart: always
 
-  # ==========================================
-  # 2. Message Broker (Fabrizio Pietrobono - Ingestion & Brokerage)
-  # ==========================================
+# ==========================================
+# 2. Message Broker
+# ==========================================
   ingestion-broker:
-      build: 
-        context: ./broker
-        dockerfile: Dockerfile
-      container_name: echo-ingestion-broker
-      ports:
-        - "8000:8000" # Port exposed for fan-out WebSocket communication server
-      depends_on:
-        - seismic-simulator
-      networks:
-        - echo-network
-      restart: on-failure
+    build:
+      context: ./broker
+      dockerfile: Dockerfile
+    container_name: echo-ingestion-broker
+    ports:
+      - "8000:8000"
+    depends_on:
+      - seismic-simulator
+    networks:
+      - echo-network
+    restart: on-failure
 
-  # ==========================================
-  # 3. Processing Engine (Emanuele Smisi - Signal Processing)
-  # ==========================================
+# ==========================================
+# 3. Processing Engine
+# ==========================================
   processing-replica:
-    build: 
+    build:
       context: ./processing-engine
       dockerfile: Dockerfile
     deploy:
-      replicas: 3 # Start with 3 dynamically scaling replicas
+      replicas: 3
+    environment:
+      - PYTHONUNBUFFERED=1                              # ← FIX: log visibili in docker logs
+      - BROKER_WS_URL=ws://ingestion-broker:8000        # ← FIX: URL esplicito
+      - SIMULATOR_URL=http://seismic-simulator:8080     # ← FIX: URL esplicito
+      - DB_SERVICE_URL=http://backend-api:3000          # ← FIX: URL esplicito
+      # REPLICA_ID rimosso → usa socket.gethostname() automaticamente (univoco per container)
     depends_on:
       ingestion-broker:
         condition: service_started
@@ -53,79 +59,78 @@ services:
       - echo-network
     restart: on-failure
 
-  # ==========================================
-  # 4. Persistence Layer (Luca Buonomini - Backend & Database)
-  # ==========================================
+# ==========================================
+# 4. Persistence Layer - Database
+# ==========================================
   database:
-    image: postgres:15-alpine
-    container_name: echo-database
-    environment:
-      POSTGRES_USER: echo_admin
-      POSTGRES_PASSWORD: echodbpassword
-      POSTGRES_DB: echo_classified_events
-    ports:
-      - "5432:5432"
-    volumes:
-      - echo-db-data:/var/lib/postgresql/data
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U echo_admin -d echo_classified_events"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+      image: postgres:15-alpine
+      container_name: echo-database
+      environment:
+        POSTGRES_USER: echo_admin
+        POSTGRES_PASSWORD: echodbpassword
+        POSTGRES_DB: echo_classified_events
+      ports:
+        - "5432:5432"
+      volumes:
+        - echo-db-data:/var/lib/postgresql/data
+      networks:
+        - echo-network
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U echo_admin -d echo_classified_events"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+  
+  
   backend-api:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: echo-backend-api
-    environment:
-      - DB_HOST=database
-      - DB_USER=echo_admin
-      - DB_PASS=echodbpassword
-      - DB_NAME=echo_classified_events
-    depends_on:
-      database:
-        condition: service_healthy
-    networks:
-      - echo-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-
-  # ==========================================
-  # 5. Command Dashboard (Fabiano Cacioli - Frontend)
+      build:
+        context: ./backend
+        dockerfile: Dockerfile
+      container_name: echo-backend-api
+      environment:
+        - DB_HOST=database
+        - DB_USER=echo_admin
+        - DB_PASS=echodbpassword
+        - DB_NAME=echo_classified_events
+      depends_on:
+        database:
+          condition: service_healthy
+      networks:
+        - echo-network
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+        interval: 15s
+        timeout: 5s
+        retries: 3
+  # ===========================================
+  # 5. Command Dashboard
   # ==========================================
   dashboard:
-    build: 
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: echo-dashboard
-    environment:
-      - REACT_APP_API_URL=http://localhost/api
-      - REACT_APP_WS_URL=ws://localhost/ws
-    networks:
-      - echo-network
-    depends_on:
-      - backend-api
-
+      build:
+        context: ./frontend
+        dockerfile: Dockerfile
+      container_name: echo-dashboard
+      environment:
+        - REACT_APP_API_URL=http://localhost/api
+        - REACT_APP_WS_URL=ws://localhost/ws
+      networks:
+        - echo-network
+      depends_on:
+        - backend-api
   # ==========================================
   # External System Actor
   # ==========================================
   seismic-simulator:
-    image: seismic-signal-simulator:multiarch_v1
-    container_name: echo-seismic-simulator
-    ports:
-      - "8080:8080" # Exposed for the broker to connect via WS/SSE
-    networks:
-      - echo-network
-
-# ==========================================
-# Global Networks & Volumes
-# ==========================================
+      image: seismic-signal-simulator:multiarch_v1
+      container_name: echo-seismic-simulator
+      ports:
+        - "8080:8080"
+      networks:
+        - echo-network
+  
+  # ==========================================
+  # Global Networks & Volumes
+  # ==========================================
 networks:
   echo-network:
     driver: bridge
@@ -133,3 +138,4 @@ networks:
 volumes:
   echo-db-data:
     driver: local
+

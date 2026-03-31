@@ -58,7 +58,7 @@ class SensorInfo:
     full_ws_url:   str    # full WS address, e.g. ws://localhost:8080/api/device/sensor-08/ws
     location:      dict   # {"latitude": float, "longitude": float} — forwarded to replicas
     raw:           dict   # original JSON payload from /api/devices/, kept for debugging
-
+    sampling_rate: float
 # ==========================================
 # 5. DISCOVERY
 # ==========================================
@@ -86,16 +86,21 @@ async def discover_sensors(session: aiohttp.ClientSession) -> list[SensorInfo]:
         ws_path     = device["websocket_url"]
         full_ws_url = f"ws://{SIMULATOR_BASE_URL.split('://')[-1]}{ws_path}"
 
-        # Extract location if the simulator provides it; default to 0,0 otherwise.
-        # Replicas need this to build the schema-compliant event payload.
-        location = device.get("location", {"latitude": 0.0, "longitude": 0.0})
+        coords = device.get("coordinates", {})
+        location = {
+            "latitude": float(coords.get("latitude", 0.0)),
+            "longitude": float(coords.get("longitude", 0.0))
+        }
+
+        sampling_rate = float(device.get("sampling_rate_hz", 20.0))
 
         sensors.append(SensorInfo(
             sensor_id     = sensor_id,
             websocket_url = ws_path,
             full_ws_url   = full_ws_url,
             location      = location,
-            raw           = device
+            raw           = device,
+            sampling_rate = sampling_rate
         ))
         logger.info(
             f"  ✓ Discovered: {sensor_id} → {full_ws_url} "
@@ -185,7 +190,8 @@ async def read_messages(
         data["value"]       = float(data["value"])   # normalise to native float
         data["ingested_at"] = datetime.now(timezone.utc).isoformat()
         data["location"]    = sensor.location        # lat/lon from discovery payload
-
+        data["sampling_rate_hz"] = sensor.sampling_rate
+        
         await output_queue.put(data)
 
 # ==========================================
@@ -247,22 +253,33 @@ async def sensor_ingestion_loop(
 
 async def replica_handler(websocket) -> None:
     """
-    Accepts an incoming WebSocket connection from a processing replica (US-6, US-17).
-    Registers it in _active_replicas and keeps the connection alive.
-    Replicas are receive-only consumers; any messages they send are silently ignored.
+    Accepts an incoming WebSocket connection from a processing replica.
+    Registers it in _active_replicas and runs an active ping loop.
+    If the replica stops responding, it is removed from the pool (US-16).
     """
     replica_addr = websocket.remote_address
     logger.info(f"[Server] New replica connected: {replica_addr}")
     _active_replicas.add(websocket)
 
     try:
-        async for _ in websocket:
-            pass
-    except websockets.ConnectionClosed:
-        pass
+        while True:
+            try:
+                pong_waiter = await websocket.ping()
+                await asyncio.wait_for(pong_waiter, timeout=10.0)
+                logger.debug(f"[health] Replica {replica_addr} — pong received ✓")
+            except (asyncio.TimeoutError, websockets.ConnectionClosed):
+                logger.warning(
+                    f"[health] Replica {replica_addr} failed health-check — removing from pool."
+                )
+                break
+
+            await asyncio.sleep(15)
+
     finally:
-        _active_replicas.discard(websocket)   # discard: safe even if already removed
-        logger.warning(f"[Server] Replica disconnected: {replica_addr}")
+        _active_replicas.discard(websocket)
+        logger.warning(f"[Server] Replica removed from pool: {replica_addr}")
+
+
 
 
 async def fanout_dispatcher(output_queue: asyncio.Queue) -> None:

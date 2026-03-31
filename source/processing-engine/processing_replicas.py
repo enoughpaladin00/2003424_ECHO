@@ -1,14 +1,12 @@
-# main.py
+# ==========================================
 # E.C.H.O. Processing Replica
 # Covers: FFT analysis, sliding window, event classification, severity score,
 #         broker ingestion, SSE shutdown listener, persistence, FastAPI health endpoint
+# ==========================================
 
-# ==========================================
-# 1. IMPORTS
-# ==========================================
 import asyncio
+import socket
 import os
-import sys
 import time
 import json
 import uuid
@@ -20,11 +18,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import uvicorn
 from typing import Optional
+import sys
+sys.stdout.reconfigure(line_buffering=True) 
 
 # ==========================================
 # 2. CONFIGURATION
 # ==========================================
-
 
 BROKER_WS_URL  = os.getenv("BROKER_WS_URL",  "ws://ingestion-broker:8000")
 SIMULATOR_URL  = os.getenv("SIMULATOR_URL",   "http://seismic-simulator:8080")
@@ -32,31 +31,21 @@ DB_SERVICE_URL = os.getenv("DB_SERVICE_URL",  "http://backend-api:3000")
 
 WINDOW_SIZE    = int(os.getenv("WINDOW_SIZE", "100"))
 FFT_STEP       = int(os.getenv("FFT_STEP",    "10"))
-THRESHOLD      = float(os.getenv("THRESHOLD", "80.0"))
+THRESHOLD      = float(os.getenv("THRESHOLD", "40.0"))
 FS             = int(os.getenv("FS",          "20"))
-REPLICA_ID     = os.getenv("REPLICA_ID",      "replica-?")
+REPLICA_ID     = os.getenv("REPLICA_ID", socket.gethostname())
 
 # ==========================================
 # 3. CORE MATH LOGIC (FFT & Classification)
 # ==========================================
 
-# Exact enum values as defined in the E.C.H.O. event schema
-EVENT_TYPE_EARTHQUAKE  = "Earthquake"
-EVENT_TYPE_EXPLOSION   = "Conventional explosion"   # lowercase 'e' — matches schema enum
-EVENT_TYPE_NUCLEAR     = "Nuclear-like event"
-EVENT_TYPE_NONE        = "No significant event"
+EVENT_TYPE_EARTHQUAKE = "Earthquake"
+EVENT_TYPE_EXPLOSION  = "Conventional explosion"
+EVENT_TYPE_NUCLEAR    = "Nuclear-like event"
+EVENT_TYPE_NONE       = "No significant event"
 
 
 def compute_severity_score(max_magnitude: float, threshold: float) -> float:
-    """
-    Calculates a normalised severity score [0.0 – 100.0] based on signal amplitude.
-    Score is proportional to how far the magnitude exceeds the noise threshold.
-    Capped at 100 to keep values human-readable on the dashboard.
-
-    Formula: score = min((magnitude / threshold) * 50, 100.0)
-    A magnitude exactly at threshold → score 50 (moderate).
-    A magnitude 2× threshold        → score 100 (maximum).
-    """
     if threshold <= 0:
         return 0.0
     return round(min((max_magnitude / threshold) * 50.0, 100.0), 2)
@@ -65,36 +54,28 @@ def compute_severity_score(max_magnitude: float, threshold: float) -> float:
 def analyze_seismic_window(
     window,
     fs: int = 20,
-    threshold: float = 80.0
+    threshold: float = 40.0
 ) -> tuple[str, float, float, float]:
-    """
-    Analyses a seismic time-domain window using real FFT.
-
-    Args:
-        window:    array of seismic samples (mm/s)
-        fs:        sampling frequency in Hz (must match simulator SAMPLING_RATE_HZ)
-        threshold: minimum FFT magnitude to trigger classification (noise gate)
-
-    Returns:
-        (event_type, dominant_freq_hz, max_magnitude, severity_score)
-        event_type is one of the EVENT_TYPE_* constants above.
-    """
     window = np.asarray(window, dtype=float)
-    window = window - np.mean(window)   # remove DC offset before FFT
+
+    # Detrend: rimuove offset DC
+    window = window - np.mean(window)
+    # Hanning window: previene spectral leakage
+    window = window * np.hanning(len(window))
 
     freqs      = np.fft.rfftfreq(len(window), d=1 / fs)
     magnitudes = np.abs(np.fft.rfft(window))
-    magnitudes[0] = 0.0                 # zero DC bin as safety guard
+
+    # Azzera DC e rumore a bassissima frequenza (< 0.2 Hz)
+    magnitudes[freqs < 0.2] = 0.0
 
     max_idx       = int(np.argmax(magnitudes))
     dominant_freq = float(freqs[max_idx])
     max_magnitude = float(magnitudes[max_idx])
 
-    # Noise gate — skip classification if signal is too weak
     if max_magnitude < threshold:
         return EVENT_TYPE_NONE, dominant_freq, max_magnitude, 0.0
 
-    # Classify by dominant frequency band (Rule Model §A)
     if 0.5 <= dominant_freq < 3.0:
         event_type = EVENT_TYPE_EARTHQUAKE
     elif 3.0 <= dominant_freq < 8.0:
@@ -113,52 +94,34 @@ def analyze_seismic_window(
 # ==========================================
 
 class SeismicReplicaState:
-    """
-    Manages per-sensor sliding windows and runs FFT-based event detection
-    on each incoming sample. One instance per processing replica.
-    """
-
     def __init__(
         self,
         window_size: int = 100,
         fs: int = 20,
-        threshold: float = 80.0,
-        step: int = 10
+        threshold: float = 40.0,
+        step: int = 10,
+        cooldown_seconds: float = 5.0   # ← NUOVO
     ):
-        """
-        Args:
-            window_size: samples per analysis window (100 @ 20 Hz = 5 s)
-            fs:          sampling frequency — must match simulator SAMPLING_RATE_HZ
-            threshold:   minimum FFT magnitude to trigger an event (noise gate)
-            step:        run FFT every N new samples (hop size) to avoid redundant
-                         computation on heavily overlapping windows
-        """
-        self.window_size = window_size
-        self.fs          = fs
-        self.threshold   = threshold
-        self.step        = step
+        self.window_size      = window_size
+        self.fs               = fs
+        self.threshold        = threshold
+        self.step             = step
+        self.cooldown_seconds = cooldown_seconds  # ← NUOVO
 
         self.sensor_buffers:   dict[str, deque] = {}
         self._sample_counters: dict[str, int]   = {}
+        self._last_emitted:    dict[str, float] = {}  # ← NUOVO: sensor_id → wall-clock time
 
     def process_incoming_sample(
         self,
         sensor_id: str,
         value: float,
+        fs: float,
         timestamp: Optional[str] = None,
         location: Optional[dict] = None,
     ) -> Optional[dict]:
-        """
-        Call for every measurement received from the broker.
 
-        Returns a fully schema-compliant detection dict if an event is found,
-        otherwise None. The dict is ready to POST to the persistence layer.
-
-        Schema fields returned:
-            eventId, sensorId, timestamp, location,
-            dominantFrequencyHz, eventType, severityScore
-        """
-        # Lazy-initialise buffer and counter for newly seen sensors
+        # Lazy-init buffer e contatore
         if sensor_id not in self.sensor_buffers:
             self.sensor_buffers[sensor_id]   = deque(maxlen=self.window_size)
             self._sample_counters[sensor_id] = 0
@@ -166,34 +129,41 @@ class SeismicReplicaState:
         self.sensor_buffers[sensor_id].append(value)
         self._sample_counters[sensor_id] += 1
 
-        # Wait for a full window before any analysis
+        # Aspetta finestra piena
         if len(self.sensor_buffers[sensor_id]) < self.window_size:
             return None
 
-        # Run FFT only every `step` samples (sliding window with hop)
+        # Analisi FFT solo ogni `step` sample
         if self._sample_counters[sensor_id] % self.step != 0:
             return None
 
         window_data = np.array(self.sensor_buffers[sensor_id])
         event_type, dominant_freq, magnitude, severity = analyze_seismic_window(
-            window_data, fs=self.fs, threshold=self.threshold
+            window_data, fs=fs, threshold=self.threshold
         )
 
         if event_type == EVENT_TYPE_NONE:
             return None
 
-        # Build the canonical E.C.H.O. event payload (camelCase — schema compliant)
+        # ← NUOVO: cooldown per-sensore — evita burst di detections sullo stesso evento fisico
+        now  = time.time()
+        last = self._last_emitted.get(sensor_id, 0.0)
+        if now - last < self.cooldown_seconds:
+            return None
+        self._last_emitted[sensor_id] = now
+
+        sample_ts = timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ts_seed = sample_ts[:19]
         return {
-            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL,f"{sensor_id}:{timestamp}:{event_type}")),  # unique UUID per detection
-            "sensorId":            sensor_id,
-            "timestamp":           timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "location":            location or {"latitude": 0.0, "longitude": 0.0},
+            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{sensor_id}{ts_seed}")),
+            "sensorId":           sensor_id,
+            "timestamp":          sample_ts,
+            "location":           location or {"latitude": 0.0, "longitude": 0.0},
             "dominantFrequencyHz": round(dominant_freq, 2),
-            "eventType":           event_type,          # exact schema enum value
-            "severityScore":       severity,
-            # Internal metadata — not in public schema, useful for debugging
-            "_replicaId":          REPLICA_ID,
-            "_rawMagnitude":       round(magnitude, 2),
+            "eventType":          event_type,
+            "severityScore":      severity,
+            "replicaId":         REPLICA_ID,
+            "rawMagnitude":      round(magnitude, 2),
         }
 
 
@@ -205,32 +175,78 @@ state = SeismicReplicaState(
     window_size=WINDOW_SIZE,
     fs=FS,
     threshold=THRESHOLD,
-    step=FFT_STEP
+    step=FFT_STEP,
+    cooldown_seconds=5.0   # ← NUOVO: 1 detection ogni 5s per sensore
 )
+
+
+# ==========================================
+# CIRCUIT BREAKER (US-18)
+# ==========================================
+
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout  = recovery_timeout
+        self._failures         = 0
+        self._state            = "CLOSED"
+        self._opened_at: float = 0.0
+
+    @property
+    def state(self) -> str:
+        if self._state == "OPEN":
+            if time.monotonic() - self._opened_at >= self.recovery_timeout:
+                self._state = "HALF-OPEN"
+                print("[circuit-breaker] → HALF-OPEN: testing recovery...")
+        return self._state
+
+    def record_success(self):
+        self._failures = 0
+        if self._state != "CLOSED":
+            print("[circuit-breaker] → CLOSED: persistence layer recovered ✓")
+        self._state = "CLOSED"
+
+    def record_failure(self):
+        self._failures += 1
+        if self._failures >= self.failure_threshold:
+            self._state     = "OPEN"
+            self._opened_at = time.monotonic()
+            print(
+                f"[circuit-breaker] → OPEN after {self._failures} failures. "
+                f"Retrying in {self.recovery_timeout}s."
+            )
+
+    def is_open(self) -> bool:
+        return self.state == "OPEN"
+
+
+_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30.0)
+
 
 # ==========================================
 # 6. ASYNC TASKS
 # ==========================================
 
 async def persist_event(event: dict) -> None:
-    """
-    Fire-and-forget POST to the persistence service.
-    The persistence layer is responsible for idempotent insertion (US-20).
-    The unique eventId UUID ensures deduplication across replicas.
-    """
+    if _circuit_breaker.is_open():
+        print(f"[circuit-breaker] OPEN — dropping event {event.get('eventId')}")
+        return
+
     async with httpx.AsyncClient() as client:
         try:
-            await client.post(f"{DB_SERVICE_URL}/events", json=event, timeout=5.0)
-        except Exception as e:
+            response = await client.post(
+                f"{DB_SERVICE_URL}/events",
+                json=event,
+                timeout=5.0
+            )
+            response.raise_for_status()
+            _circuit_breaker.record_success()
+        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as e:
+            _circuit_breaker.record_failure()
             print(f"[persist] Failed to store event {event.get('eventId')}: {e}")
 
 
 async def listen_to_broker() -> None:
-    """
-    Maintains a persistent WebSocket connection to the broker (US-5, US-6).
-    Reconnects automatically on any transient failure.
-    Expected message format from broker: { sensor_id, timestamp, value, [location] }
-    """
     print(f"[broker] Connecting to {BROKER_WS_URL} ...")
     while True:
         try:
@@ -246,18 +262,20 @@ async def listen_to_broker() -> None:
                     sensor_id = msg.get("sensor_id") or msg.get("sensorId")
                     value     = msg.get("value")
                     timestamp = msg.get("timestamp")
-                    location  = msg.get("location")    # pass through if broker enriches it
+                    location  = msg.get("location")
+                    fs_rate   = float(msg.get("sampling_rate_hz", FS))
 
                     if sensor_id is None or value is None:
-                        print(f"[broker] Missing required fields, skipping: {msg}")
                         continue
 
                     detection = state.process_incoming_sample(
                         sensor_id=sensor_id,
                         value=float(value),
+                        fs=fs_rate,
                         timestamp=timestamp,
                         location=location,
                     )
+
                     if detection:
                         print(
                             f"[detection] {detection['eventType']} | "
@@ -271,40 +289,44 @@ async def listen_to_broker() -> None:
             print(f"[broker] Connection lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
 
+
 async def listen_for_shutdown() -> None:
-    """
-    Listens to the simulator's SSE control stream (US-15).
-    Self-terminates the replica upon receiving a SHUTDOWN command.
-    """
     url = f"{SIMULATOR_URL}/api/control"
-    SSE_PREFIX = "data:"
 
     while True:
         try:
             timeout = httpx.Timeout(None)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("GET", url) as response:
-                    async for chunk in response.aiter_text():
-                        for event in chunk.split('\n\n'):
-                            event = event.strip()
-                            if not event.startswith(SSE_PREFIX):
-                                continue
+                    current_event_type = None
 
-                            payload_str = event[len(SSE_PREFIX):].strip()
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+
+                        if line.startswith("event:"):
+                            current_event_type = line[6:].strip()
+
+                        elif line.startswith(""):
+                            if current_event_type != "command":
+                                continue
+                            payload_str = line[5:].strip()
                             if not payload_str:
                                 continue
-
                             try:
                                 payload = json.loads(payload_str)
                                 if payload.get("command") == "SHUTDOWN":
                                     print("[control] SHUTDOWN received. Terminating replica.")
-                                    os._exit(0)
+                                    os._exit(1)
                             except json.JSONDecodeError:
                                 continue
-                                
+
+                        elif line == "":
+                            current_event_type = None
+
         except Exception as e:
             print(f"[control] SSE stream lost: {e}. Retrying in 3s...")
             await asyncio.sleep(3)
+
 
 # ==========================================
 # 7. FASTAPI APP
@@ -318,17 +340,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="E.C.H.O. Processing Replica", lifespan=lifespan)
 
-
 @app.get("/health")
 def health():
-    """Health endpoint for broker/gateway active health-checks (US-16)."""
     return {
         "status":          "ok",
         "replica_id":      REPLICA_ID,
         "sensors_tracked": list(state.sensor_buffers.keys()),
         "buffer_sizes":    {k: len(v) for k, v in state.sensor_buffers.items()},
     }
-
 
 if __name__ == "__main__":
     uvicorn.run("processing_replicas:app", host="0.0.0.0", port=8080, reload=False)

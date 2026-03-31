@@ -16,4 +16,5 @@ echo "Step 2: Building and starting E.C.H.O. platform with Docker Compose..."
 docker compose up -d --build
 
 echo "System is up and running in detached mode!"
-echo "Gatway is accessible at http://localhost"
+docker compose restart api-gateway
+echo "Gateway is accessible at http://localhost"
