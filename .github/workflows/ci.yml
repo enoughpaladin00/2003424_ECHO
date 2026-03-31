@@ -1,0 +1,75 @@
+name: E.C.H.O. Infrastructure CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    name: Validate and Build Docker Services
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Mock Simulator Image
+        run: |
+          # The CI runner needs the image to exist to pass compose validation
+          docker pull alpine:latest
+          docker tag alpine:latest seismic-signal-simulator:multiarch_v1
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          echo "Validating docker-compose.yml syntax..."
+          # Quoting the directory path to handle spaces in the project name
+          cd "source" && docker compose config -q
+
+      - name: Build Custom Microservices
+        run: |
+          echo "Building Frontend, Backend, and Processing Engine containers..."
+          cd "source" && docker compose build dashboard backend-api processing-replica ingestion-broker
+
+      - name: Verify Nginx Configuration Syntax
+        run: |
+          echo "Testing Nginx configuration for syntax errors..."
+          # 1. Comment out the internal Docker resolver for the test
+          sed 's/resolver 127.0.0.11/# resolver 127.0.0.11/g' "${{ github.workspace }}/source/gateway/nginx.conf" > nginx_test.conf
+          
+          docker run --rm \
+            --add-host backend-api:127.0.0.1 \
+            --add-host dashboard:127.0.0.1 \
+            --add-host processing-replica:127.0.0.1 \
+            --add-host echo-dashboard:127.0.0.1 \
+            -v "$(pwd)/nginx_test.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:alpine nginx -t
+
+  unit-tests:
+    name: Run Python Unit Tests
+    runs-on: ubuntu-latest
+    needs: build-and-test  # parte solo se il build è andato a buon fine
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-asyncio numpy httpx fastapi uvicorn websockets
+
+      - name: Run unit tests
+        run: |
+          pip install pytest pytest-asyncio numpy httpx fastapi uvicorn websockets
+          PYTHONPATH=source/processing-engine pytest source/tests/ -v --tb=short
+
